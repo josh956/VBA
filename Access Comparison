@@ -1,0 +1,463 @@
+
+Sub CompareTerminatedUsersWithSystems_3_14_Simple_score()
+    On Error GoTo ErrHandler
+    
+    ' Prompt the user to select the range of terminated users
+    Dim terminatedRange As Range
+    Set terminatedRange = Application.InputBox("Select the column containing the usernames of the terminated users. Select the entire column by clicking the column letter:", Type:=8)
+    
+     ' Prompt the user to select the range of termination dates
+    Dim terminationDatesRange As Range
+    On Error Resume Next ' Temporarily ignore errors to handle the case where the user clicks "Cancel"
+    Set terminationDatesRange = Application.InputBox("Select the range of termination dates. Select the entire column by clicking the column letter:", Type:=8)
+    On Error GoTo ErrHandler ' Return to normal error handling
+    ' If the user clicks Cancel, terminationDatesRange remains Nothing, which we handle later
+
+  
+  ' Declare and dimension arrays to store ranges and names of each system
+Dim systemRangeCollection As New Collection
+Dim systemNameCollection As New Collection
+Dim inputRange As Range
+Dim systemIndex As Integer
+systemIndex = 1
+
+Do
+    On Error Resume Next ' Handle errors, such as cancelling the input box
+    Set inputRange = Application.InputBox("Select the range of users ([Last, First], [Email], etc.) in system " & systemIndex & ":", Type:=8)
+    If Err.Number <> 0 Then ' Check if an error occurred (e.g., cancel was clicked)
+        If systemIndex = 1 Then ' If it's the first system and user cancels, exit
+            MsgBox "No systems selected. Exiting."
+            Exit Sub
+        Else ' If it's not the first system, just exit the loop without error
+            Err.Clear ' Clear the error
+            Exit Do
+        End If
+    End If
+    On Error GoTo 0 ' Turn off the On Error Resume Next to resume normal error handling
+    
+    ' Check if the user pressed Cancel or closed the input box without selecting a range
+    If Not inputRange Is Nothing Then
+        systemRangeCollection.Add inputRange
+        systemNameCollection.Add inputRange.Worksheet.Parent.name & " - " & inputRange.Worksheet.name
+        systemIndex = systemIndex + 1 ' Increment only if a valid range was selected
+    End If
+    
+    ' Ask the user if they want to add another system, unless they've just cancelled or closed the input box
+    If inputRange Is Nothing Then
+        If MsgBox("You did not select a range. Do you want to try adding a system again?", vbYesNo + vbQuestion, "Add Another System?") = vbYes Then
+            ' If yes, continue the loop to allow selecting another system
+        Else
+            Exit Do ' If no, exit the loop
+        End If
+    Else
+        If MsgBox("Do you want to add another system?", vbYesNo + vbQuestion, "Add Another System?") = vbNo Then
+            Exit Do ' If no more systems to add, exit the loop
+        End If
+    End If
+Loop
+
+
+    ' Now transfer the ranges and names from the collections to the arrays
+    Dim systemRanges() As Range
+    ReDim systemRanges(1 To systemRangeCollection.Count)
+    Dim systemNames() As String
+    ReDim systemNames(1 To systemNameCollection.Count)
+
+    Dim i As Integer
+    For i = 1 To systemRangeCollection.Count
+        Set systemRanges(i) = systemRangeCollection(i)
+        systemNames(i) = systemNameCollection(i)
+    Next i
+    
+  ' Call the subroutine to compare and report findings
+    CompareAndReport terminatedRange, terminationDatesRange, systemRanges, systemNames
+
+    ' Re-enable screen updating
+    Application.ScreenUpdating = True
+    Exit Sub
+
+ErrHandler:
+ MsgBox "You cancelled selecting the terminated users range. Please select the range and try again.", vbInformation
+    Application.ScreenUpdating = True
+End Sub
+
+Sub CompareAndReport(terminatedUsers As Range, terminationDatesRange As Range, systemRanges() As Range, systemNames() As String)
+    ' Create a dictionary object to store and track terminated users
+    Dim terminatedDict As Object
+    Set terminatedDict = CreateObject("Scripting.Dictionary")
+    Dim duplicateCheckDict As Object
+    Set duplicateCheckDict = CreateObject("Scripting.Dictionary")
+    
+    Dim matchWs As Worksheet
+    Set matchWs = ActiveWorkbook.Worksheets.Add
+    matchWs.name = "Matches " & Format(Now, "mm-dd hh-mm_ss")
+
+    ' Setup the headers for the output worksheet
+    With matchWs
+        .Cells(1, 1).value = "From Termination Listing"
+        .Cells(1, 2).value = "From System Listing"
+        ' Inserting new header for Similarity Score
+        .Cells(1, 3).value = "Similarity Score"
+        .Cells(1, 4).value = "Termination Date"
+        .Cells(1, 5).value = "System Reference"
+        .Cells(1, 6).value = "System Row Number"
+        .Cells(1, 7).value = "Termination Listing Row Number"
+        .Cells(1, 8).value = "Notes - Tester review notes (i.e. duplicate, inactive, disabled, rehire, etc.)"
+        .Cells(1, 9).value = "Exception (Yes/No)"
+        .Cells(1, 1).CurrentRegion.AutoFilter ' Enable AutoFilter for the header row
+        .Activate
+        .Cells(2, 2).Select
+        ActiveWindow.FreezePanes = True
+    End With
+
+    Dim nextRow As Long
+    nextRow = 2 ' Start writing matches from the second row
+
+    ' Populate the dictionary with non-empty users from the terminated list along with termination dates
+    Dim cell As Range, userKey As String
+    For Each cell In terminatedUsers.Cells
+        If Not IsEmpty(cell.value) Then
+            userKey = TransformNameForComparison(LCase(cell.value))
+
+            ' Check if the transformed key already exists to prevent duplicates
+            If Not terminatedDict.Exists(userKey) Then
+                Dim termDate As Variant
+                If Not terminationDatesRange Is Nothing Then
+                    If cell.Row <= terminationDatesRange.Rows.Count Then
+                        termDate = terminationDatesRange.Cells(cell.Row, 1).value
+                    Else
+                        termDate = "Unknown" ' Or handle as appropriate if no date is provided
+                    End If
+                Else
+                    termDate = "Date Not Provided" ' Handle cases where no termination date range is selected
+                End If
+                terminatedDict.Add userKey, Array(cell.value, termDate, cell.Row)
+            End If
+        End If
+    Next cell
+
+    ' Loop through each system's range and check for matches
+    Dim systemValue As String
+    Dim matchKey As String
+
+  For i = LBound(systemRanges) To UBound(systemRanges)
+    For Each cell In systemRanges(i).Cells
+        If Not IsEmpty(cell.value) Then
+            systemValue = TransformNameForComparison(LCase(cell.value))
+
+            If terminatedDict.Exists(systemValue) Then
+                Dim userData As Variant
+                userData = terminatedDict(systemValue)
+                matchKey = systemValue & "|" & systemNames(i)
+
+                ' Corrected part: Ensure userData(0) and cell.Value are treated as strings
+                Dim similarityScore As Double
+                similarityScore = CalculateSimilarityScore(CStr(userData(0)), CStr(cell.value))
+
+                ' Write match data to the Matches sheet
+                With matchWs
+                    .Cells(nextRow, 1).value = userData(0) ' Terminated User
+                    .Cells(nextRow, 2).value = cell.value ' System User
+                    .Cells(nextRow, 3).value = Format(Round(similarityScore * 100, 0), "0") & "%" ' Similarity Score
+                    .Cells(nextRow, 4).value = userData(1) ' Termination Date
+                    .Cells(nextRow, 5).value = systemNames(i) ' System Name
+                    .Cells(nextRow, 6).value = cell.Row ' System Row Number
+                    .Cells(nextRow, 7).value = userData(2) ' Terminated Row Number
+                    nextRow = nextRow + 1
+                End With
+            End If
+        End If
+    Next cell
+Next i
+
+
+    ' Auto-fit columns for readability
+    With matchWs
+        .Columns("A:I").AutoFit
+    End With
+    
+    ' Add conditional formatting to highlight cells in column H that contain "yes" in any case
+  Set cfRange = matchWs.Range("I2:I" & matchWs.Cells(matchWs.Rows.Count, "I").End(xlUp).Row)
+  
+    cfRange.FormatConditions.Add Type:=xlExpression, Formula1:="=LOWER(I2)=""yes"""
+
+    With cfRange.FormatConditions(cfRange.FormatConditions.Count)
+        .Font.Color = RGB(0, 0, 0) ' Black text
+        .Interior.Color = RGB(255, 199, 206) ' Light red background
+    End With
+    
+  ' Assuming this is done after the loop that populates the worksheet
+Dim cfRangea As Range
+Set cfRangea = matchWs.Range("C2:C" & nextRow - 1)  ' Adjust based on where your data ends
+
+With cfRangea
+    .FormatConditions.Delete  ' Clear any existing conditional formats
+    .FormatConditions.AddColorScale ColorScaleType:=3  ' Adding a 3-color scale
+
+    With .FormatConditions(.FormatConditions.Count)
+        .ColorScaleCriteria(1).Type = xlConditionValueLowestValue
+        .ColorScaleCriteria(1).FormatColor.Color = RGB(255, 235, 156)  ' Lighter orange
+
+        .ColorScaleCriteria(2).Type = xlConditionValuePercentile
+        .ColorScaleCriteria(2).value = 50
+        .ColorScaleCriteria(2).FormatColor.Color = RGB(255, 185, 0)  ' Medium orange
+
+        .ColorScaleCriteria(3).Type = xlConditionValueHighestValue
+        .ColorScaleCriteria(3).FormatColor.Color = RGB(255, 135, 0)  ' Darker orange
+    End With
+End With
+   
+    
+    
+' After initializing and setting up matchWs in CompareTerminatedUsersWithSystems or CompareAndReport
+ Call AddTextBoxToSheet(matchWs)
+    ' Inform the user about the matches found
+    MsgBox (nextRow - 2) & " matches found. Filter column D for desired date range.", vbInformation
+End Sub
+
+Sub AddTextBoxToSheet(ByRef matchWs As Worksheet)
+    ' Initial setup for the TextBox size and position
+    Dim startPosition As Double
+    startPosition = matchWs.Range("C1").Left
+    Dim tbWidth As Double
+    tbWidth = 400 ' Arbitrary width for demonstration
+    Dim tbHeight As Double
+    tbHeight = 277 ' height of the text box
+    
+    ' Determine the top position for the text box
+    Dim topPosition As Double
+    topPosition = matchWs.Rows(2).Top - 1 ' Subtracting 1 to ensure it's exactly at the top of row 2
+    
+    ' Create the TextBox
+    Dim tb As Shape
+    Set tb = matchWs.Shapes.AddTextbox(msoTextOrientationHorizontal, startPosition, topPosition, tbWidth, tbHeight)
+    
+    ' Populate the TextBox and adjust format
+    With tb.TextFrame
+        .Characters.text = "Notes from developer (This textbox is informational only and can be deleted after reviewing). Tester needs to do a spot check validation to confirm each user listing was reviewed" & vbCrLf & _
+                           "- The tool is designed to identify matches in the following formats. If other formats are selected matches may not be identified." & vbCrLf & _
+                           "- If the user name is in [First, Last] like Josh, Poresky or [Firstlast] format, like MitchChild, or [Last_First] like Ryan_Jake the tool will not identify matches." & vbCrLf & _
+                           " " & vbCrLf & _
+                           "The following formats are known to be detected:" & vbCrLf & _
+                           "[Last, First]" & vbCrLf & _
+                           "[First Last]" & vbCrLf & _
+                           "[First.last]" & vbCrLf & _
+                           "[First_last]" & vbCrLf & _
+                           "[FirstInitial_last]" & vbCrLf & _
+                           "[First.last@xyz.com]" & vbCrLf & _
+                           "[FirstInitialLast@xyz.com]" & vbCrLf & _
+                           "[First_Last@xyz.com]" & vbCrLf & _
+                           "[FirstInitialLast]" & vbCrLf & _
+                           "[Last, first, mid initial.]" & vbCrLf & _
+                           "[Last, first, mid initial]"
+                           
+    End With
+    
+    ' Set the fill color of the text box
+    tb.Fill.ForeColor.RGB = RGB(204, 229, 255) ' Light blue fill color
+End Sub
+Function TransformNameForComparison(name As String) As String
+    Dim baseName As String
+    Dim parts() As String
+    parts = Split(name, "@")
+    
+    ' Handle email by removing the domain, if present
+    If UBound(parts) >= 0 Then
+        baseName = LCase(parts(0))
+    Else
+        baseName = LCase(name)
+    End If
+    
+    ' Replace underscores with dots to treat them similarly
+    baseName = Replace(baseName, "_", ".")
+    
+    ' Check for comma-separated names first, as they may include middle initials or be in "Last, First" format
+    If InStr(baseName, ",") > 0 Then
+        TransformNameForComparison = DecideAndTransformCommaSeparatedName(baseName)
+    ' Dot-separated names, now including original underscores, indicating "First.Last" format
+    ElseIf InStr(baseName, ".") > 0 Then
+        TransformNameForComparison = TransformDotSeparatedName(baseName)
+    ' Space-separated names, potentially in "First Last" format
+    ElseIf InStr(baseName, " ") > 0 Then
+        TransformNameForComparison = TransformToInitializedName(baseName)
+    Else
+        ' If no recognized delimiter is present, return the base name as is
+        TransformNameForComparison = baseName
+    End If
+End Function
+Function DecideAndTransformCommaSeparatedName(name As String) As String
+    Dim parts() As String
+    parts = Split(name, ",")
+    
+    ' Handle names with a comma and possibly a middle initial or "LastName, Initial, FirstName"
+    If UBound(parts) = 2 Or (UBound(parts) = 1 And InStr(parts(1), ".") > 0) Then
+        ' Handles "LastName, FirstName MiddleInitial." and "LastName, FirstName."
+        ' Also correctly handles "LastName, Initial, FirstName"
+        DecideAndTransformCommaSeparatedName = TransformToUsername(name)
+    Else
+        ' Handles "LastName, FirstName"
+        DecideAndTransformCommaSeparatedName = TransformCommaSeparatedName(name)
+    End If
+End Function
+Function TransformToUsername(name As String) As String
+    Dim parts() As String
+    Dim lastName As String
+    Dim firstNameInitial As String
+    Dim firstName As String
+
+    parts = Split(name, ",")
+    lastName = Trim(parts(0))
+
+    ' Check if the format includes a middle initial or additional names
+    If UBound(parts) >= 2 Then
+        ' Assuming the format is "LastName, Initial, FirstName"
+        firstName = Trim(parts(2)) ' The first name is the third part
+        firstNameInitial = Left(firstName, 1)
+    ElseIf UBound(parts) = 1 Then
+        ' This handles "LastName, FirstName" or "LastName, FirstName MiddleInitial."
+        Dim firstNameParts() As String
+        firstNameParts = Split(Trim(parts(1)), " ")
+        firstNameInitial = Left(Trim(firstNameParts(0)), 1) ' Take the initial from the first name part
+    Else
+        ' Fallback for unexpected format
+        TransformToUsername = name
+        Exit Function
+    End If
+
+    TransformToUsername = firstNameInitial & lastName
+End Function
+
+Function TransformCommaSeparatedName(name As String) As String
+    ' Transform "LastName, FirstName" to "FirstInitialLastName"
+    Dim parts() As String
+    parts = Split(name, ",")
+    If UBound(parts) >= 1 Then
+        Dim lastName As String
+        Dim firstName As String
+        lastName = Trim(parts(0))
+        firstName = Trim(parts(1))
+        TransformCommaSeparatedName = Left(firstName, 1) & lastName
+    Else
+        TransformCommaSeparatedName = name
+    End If
+End Function
+
+Function TransformToInitializedName(name As String) As String
+    Dim parts() As String
+    parts = Split(name, " ")
+    If UBound(parts) >= 1 Then
+        TransformToInitializedName = Left(parts(0), 1) & parts(UBound(parts))
+    Else
+        TransformToInitializedName = name
+    End If
+End Function
+
+Function TransformDotSeparatedName(name As String) As String
+    Dim parts() As String
+    parts = Split(name, ".")
+    If UBound(parts) >= 1 Then
+        ' Since underscores are now treated as dots, this will correctly handle those cases too
+        TransformDotSeparatedName = Left(parts(0), 1) & parts(UBound(parts))
+    Else
+        TransformDotSeparatedName = name
+    End If
+End Function
+
+Sub AddToDictionaryIfNotExists(dict As Object, key As String, value As Variant)
+    ' Add key to dictionary if it does not exist
+    If Not dict.Exists(key) Then
+        dict.Add key, value
+    End If
+End Sub
+Function CalculateSimilarityScore(str1 As String, str2 As String) As Double
+    Dim i As Integer
+    Dim dict As Object
+    Set dict = CreateObject("Scripting.Dictionary")
+    
+    ' Remove email domains and punctuation, and make lowercase for comparison
+    str1 = ReplaceSpecialCharacters(RemoveDomain(LCase(str1)))
+    str2 = ReplaceSpecialCharacters(RemoveDomain(LCase(str2)))
+    
+    ' Sort the characters in each string
+    str1 = SortString(str1)
+    str2 = SortString(str2)
+
+    ' Count characters in the first string
+    For i = 1 To Len(str1)
+        Dim char As String
+        char = Mid(str1, i, 1)
+        If dict.Exists(char) Then
+            dict(char) = dict(char) + 1
+        Else
+            dict.Add char, 1
+        End If
+    Next i
+    
+    ' Count matching characters in the second string
+    Dim similarCount As Integer
+    similarCount = 0
+    For i = 1 To Len(str2)
+        Dim chara As String
+        chara = Mid(str2, i, 1) ' Corrected to use chara
+        If dict.Exists(chara) And dict(chara) > 0 Then ' Ensure to use chara here
+            similarCount = similarCount + 1
+            dict(chara) = dict(chara) - 1 ' And here as well
+        End If
+    Next i
+    
+    ' Calculate percentage similarity
+    If Len(str1) = 0 And Len(str2) = 0 Then
+        CalculateSimilarityScore = 1 ' Both strings are empty, consider them as 100% similar
+    Else
+        CalculateSimilarityScore = 2 * similarCount / (Len(str1) + Len(str2))
+    End If
+End Function
+
+
+Function ReplaceSpecialCharacters(str As String) As String
+    ' Define a set of characters to be removed
+    Dim removeChars As String
+    removeChars = " !""#$%&'()*+,-./:;<=>?@[\]^_`{|}~"
+    
+    Dim i As Integer
+    For i = 1 To Len(removeChars)
+        Dim char As String
+        char = Mid(removeChars, i, 1)
+        str = Replace(str, char, "")
+    Next i
+    
+    ' Remove domain from email by truncating anything after '@'
+    Dim atPos As Integer
+    atPos = InStr(str, "@")
+    If atPos > 0 Then
+        str = Left(str, atPos - 1)
+    End If
+
+    ReplaceSpecialCharacters = str
+End Function
+
+Function RemoveDomain(str As String) As String
+    Dim atPos As Integer
+    atPos = InStr(str, "@")
+    If atPos > 0 Then
+        str = Left(str, atPos - 1)
+    End If
+    RemoveDomain = str
+End Function
+
+Function SortString(str As String) As String
+    Dim i As Integer, j As Integer
+    Dim temp As String
+    For i = 1 To Len(str) - 1
+        For j = i + 1 To Len(str)
+            If Asc(Mid(str, i, 1)) > Asc(Mid(str, j, 1)) Then
+                temp = Mid(str, i, 1)
+                Mid(str, i, 1) = Mid(str, j, 1)
+                Mid(str, j, 1) = temp
+            End If
+        Next j
+    Next i
+    SortString = str
+End Function
+
+
