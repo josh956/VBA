@@ -1,0 +1,250 @@
+Sub CompareUsersAndRoles()
+    Dim wsCurrent As Worksheet, wsPrevious As Worksheet
+    Dim rngCurrentUsers As Range, rngCurrentRoles As Range, rngCurrentDates As Range
+    Dim rngPreviousUsers As Range, rngPreviousRoles As Range
+    Dim wsResults As Worksheet
+    Dim lastRowResults As Long
+    Dim dictCurrent As Object, dictPrevious As Object
+    Dim currentUser As String, currentRole As String, currentDate As String
+    Dim i As Long, j As Long
+    Dim userRoleKey As Variant
+    Dim lastUser As String ' Variable to keep track of the last encountered user
+    Dim sourceSheet As String ' Variable to keep track of the source worksheet
+    Dim applyFilter As VbMsgBoxResult ' Variable to store user's choice for filtering
+    Dim highlightAdmins As VbMsgBoxResult ' Variable to store user's choice for highlighting admin roles
+
+    ' Initialize the dictionaries
+    Set dictCurrent = CreateObject("Scripting.Dictionary")
+    Set dictPrevious = CreateObject("Scripting.Dictionary")
+
+    ' Set current and previous worksheets
+    Set wsCurrent = ActiveSheet
+    Set wsPrevious = ActiveSheet
+
+    ' Get ranges for usernames and roles for current and previous periods
+    On Error Resume Next ' Start error handling
+    Set rngCurrentUsers = Application.InputBox("Select the range of CURRENT PERIOD usernames:", Type:=8)
+    If rngCurrentUsers Is Nothing Then
+        MsgBox "User canceled the program, exiting.", vbInformation
+        Exit Sub ' Exit if the user presses cancel
+    End If
+    Set rngCurrentRoles = Application.InputBox("Select the range of CURRENT PERIOD roles:", Type:=8)
+    If rngCurrentRoles Is Nothing Then
+        MsgBox "User canceled the program, exiting.", vbInformation
+        Exit Sub ' Exit if the user presses cancel
+    End If
+
+    ' Handling the date range input optionally
+    Set rngCurrentDates = Application.InputBox("Select the range of CURRENT PERIOD dates (Optional, press Cancel if not applicable):", Type:=8)
+    On Error GoTo 0 ' Stop error handling; necessary to proceed without date input
+
+    Set rngPreviousUsers = Application.InputBox("Select the range of PREVIOUS PERIOD usernames:", Type:=8)
+    If rngPreviousUsers Is Nothing Then
+        MsgBox "User canceled the program, exiting.", vbInformation
+        Exit Sub ' Exit if the user presses cancel
+    End If
+    Set rngPreviousRoles = Application.InputBox("Select the range of PREVIOUS PERIOD roles:", Type:=8)
+    If rngPreviousRoles Is Nothing Then
+        MsgBox "User canceled the program, exiting.", vbInformation
+        Exit Sub ' Exit if the user presses cancel
+    End If
+
+    ' Create results worksheet and set the name with current date and time
+    Set wsResults = ActiveWorkbook.Sheets.Add(After:=ActiveWorkbook.Sheets(ActiveWorkbook.Sheets.Count))
+    wsResults.Name = "New Access " & Format(Now, "mm-dd-yyyy hh-mm")
+    wsResults.Cells(1, 1).Value = "Sample (X)?"
+    wsResults.Cells(1, 2).Value = "Username"
+    wsResults.Cells(1, 3).Value = "Role"
+    wsResults.Cells(1, 4).Value = "Last Modified Date"
+    wsResults.Cells(1, 5).Value = "Sheet Reference"
+    lastRowResults = 2
+
+    ' Populate dictionaries with concatenated user-role keys and date for current period
+    For i = 1 To rngCurrentUsers.Rows.Count
+        If Trim(rngCurrentUsers.Cells(i, 1).Value) <> "" Then
+            lastUser = Trim(UCase(rngCurrentUsers.Cells(i, 1).Value))
+            currentUser = Trim(rngCurrentUsers.Cells(i, 1).Value) ' Store user
+        End If
+        For j = 1 To rngCurrentRoles.Columns.Count
+            If Trim(rngCurrentRoles.Cells(i, j).Value) <> "" Then
+                currentRole = Trim(rngCurrentRoles.Cells(i, j).Value)
+                If Not rngCurrentDates Is Nothing Then
+                    currentDate = Trim(rngCurrentDates.Cells(i, j).Text) ' Get associated date
+                Else
+                    currentDate = "Date Not Provided" ' Use a placeholder if no date is provided
+                End If
+                userRoleKey = lastUser & "|||" & UCase(currentRole) & "|||" & wsCurrent.Name
+                dictCurrent(userRoleKey) = Array(currentUser, currentRole, currentDate, wsCurrent.Name) ' Include date
+            End If
+        Next j
+    Next i
+
+    ' Populate previous period dictionary similar to current but without dates
+    For i = 1 To rngPreviousUsers.Rows.Count
+        If Trim(rngPreviousUsers.Cells(i, 1).Value) <> "" Then
+            lastUser = Trim(UCase(rngPreviousUsers.Cells(i, 1).Value))
+        End If
+        For j = 1 To rngPreviousRoles.Columns.Count
+            If Trim(rngPreviousRoles.Cells(i, j).Value) <> "" Then
+                currentRole = Trim(rngPreviousRoles.Cells(i, j).Value)
+                userRoleKey = lastUser & "|||" & UCase(currentRole) & "|||" & wsPrevious.Name
+                dictPrevious(userRoleKey) = True
+            End If
+        Next j
+    Next i
+
+    ' Compare and record changes
+    For Each userRoleKey In dictCurrent.Keys
+        If Not dictPrevious.Exists(userRoleKey) Then
+            ' Check that userRoleKey is not empty before splitting
+            If userRoleKey <> "" Then
+                Dim userDetails As Variant
+                userDetails = dictCurrent(userRoleKey) ' Get details including date
+                If UBound(userDetails) = 3 Then
+                    wsResults.Cells(lastRowResults, 2).Value = userDetails(0) ' User
+                    wsResults.Cells(lastRowResults, 3).Value = userDetails(1) ' Role
+                    wsResults.Cells(lastRowResults, 4).Value = userDetails(2) ' Date
+                    wsResults.Cells(lastRowResults, 5).Value = userDetails(3) ' Source Sheet
+                    lastRowResults = lastRowResults + 1
+                Else
+                    MsgBox "Error: The userRoleKey '" & userRoleKey & "' did not contain valid information."
+                End If
+            Else
+                MsgBox "Error: Empty userRoleKey found in dictCurrent."
+            End If
+        End If
+    Next userRoleKey
+
+    ' Autofit columns for readability
+    wsResults.Columns.AutoFit
+
+    ' Additional formatting and setup for the results worksheet
+    With wsResults
+        .Cells(1, 7).Value = "User Input- Period Start Date (mm/dd/yyyy):"
+        .Cells(1, 8).Value = "User Input- Period End Date (mm/dd/yyyy):"
+        .Cells(1, 9).Value = "Duration (Days):"
+        .Cells(1, 10).Value = "Annualized Population:"
+
+        ' Apply bold formatting to the "User Input-" part of the text in cells F1 and G1
+        .Cells(1, 7).Characters(Start:=1, Length:=11).Font.Bold = True
+        .Cells(1, 8).Characters(Start:=1, Length:=11).Font.Bold = True
+        ' Format date input cells
+        .Cells(2, 7).NumberFormat = "mm/dd/yyyy"
+        .Cells(2, 8).NumberFormat = "mm/dd/yyyy"
+
+        ' Set up formulas
+        .Cells(2, 9).Formula = "=IF(OR(ISBLANK(G2), ISBLANK(H2)), """", H2 - G2)"
+        .Cells(2, 10).Formula = "=IFERROR(IF(H2 > 0, CEILING((SUBTOTAL(103, B2:B10000)) * (365 / I2), 1), """") , """")"
+
+        ' Assuming you already set wsResults and lastRowResults correctly
+        Dim startCol As Integer
+        Dim endCol As Integer
+        Dim headerRow As Range
+        Set headerRow = wsResults.Rows(1)  ' Adjust if your header is not in row 1
+
+        ' Dynamically find columns based on header names
+        startCol = headerRow.Find("Username").Column
+        endCol = headerRow.Find("Last Modified Date").Column  ' Default end column
+        If Not headerRow.Find("Sheet Reference") Is Nothing Then
+            endCol = headerRow.Find("Sheet Reference").Column  ' Adjust if Modified Date is present
+        End If
+
+        ' Define the range to format based on dynamic start and end columns
+        Dim rangeToFormat As Range
+        Set rangeToFormat = wsResults.Range(wsResults.Cells(2, startCol), wsResults.Cells(lastRowResults, endCol))
+
+        ' Apply conditional formatting to the dynamically determined range
+        With rangeToFormat
+            .FormatConditions.Delete  ' Clear any existing conditional formats
+
+            ' Apply simulated gridlines (borders)
+            Dim cell As Range
+            For Each cell In .Cells
+                With cell.Borders(xlEdgeBottom)
+                    .LineStyle = xlContinuous
+                    .Color = RGB(217, 217, 217)  ' Light grey
+                    .Weight = xlThin
+                End With
+                With cell.Borders(xlEdgeRight)
+                    .LineStyle = xlContinuous
+                    .Color = RGB(217, 217, 217)  ' Light grey
+                    .Weight = xlThin
+                End With
+                With cell.Borders(xlEdgeTop)
+                    .LineStyle = xlContinuous
+                    .Color = RGB(217, 217, 217)  ' Light grey
+                    .Weight = xlThin
+                End With
+                With cell.Borders(xlEdgeLeft)
+                    .LineStyle = xlContinuous
+                    .Color = RGB(217, 217, 217)  ' Light grey
+                    .Weight = xlThin
+                End With
+            Next cell
+        End With
+
+        ' Highlight cells F1:G2 in light orange
+        With wsResults.Range("G1:H2")
+            .Interior.Color = RGB(254, 216, 177) ' This is a light orange color
+        End With
+
+        ' Highlight cells H1:I2 in light green
+        With wsResults.Range("I1:J2")
+            .Interior.Color = RGB(198, 239, 206) ' This is a light green color
+        End With
+
+        ' Apply borders to cells F1:I2
+        With wsResults.Range("G1:J2").Borders
+            .LineStyle = xlContinuous ' Sets the border style to a continuous line
+            .Color = RGB(0, 0, 0) ' Sets the border color to black
+            .Weight = xlThin ' Sets the border weight to thin (you can also use xlMedium or xlThick)
+        End With
+
+        ' Autofit columns for readability
+        .Columns.AutoFit
+        
+        ' Prompt user to apply the filter for unique values
+        applyFilter = MsgBox("Would you like to consider each New/Modified User as 1 instance of new access?", vbYesNo + vbQuestion, "Apply Filter")
+
+        ' Apply filter if user chooses Yes
+        If applyFilter = vbYes Then
+            With wsResults
+                .Range("B1:B" & lastRowResults - 1).AdvancedFilter Action:=xlFilterInPlace, Unique:=True
+            End With
+        End If
+
+        ' Prompt user to highlight admin roles
+        highlightAdmins = MsgBox("Would you like to highlight admin roles?", vbYesNo + vbQuestion, "Highlight Admin Roles")
+  
+        ' Autofit columns for readability
+        .Columns.AutoFit
+
+        If highlightAdmins = vbYes Then
+            ' Update to apply formatting across columns B to E
+            Dim adminSuperRange As Range
+            Set adminSuperRange = wsResults.Range(wsResults.Cells(2, 2), wsResults.Cells(lastRowResults, 5))
+            adminSuperRange.FormatConditions.Add Type:=xlExpression, Formula1:="=ISNUMBER(SEARCH(""super"", $C2))"
+            adminSuperRange.FormatConditions(adminSuperRange.FormatConditions.Count).Interior.Color = RGB(255, 255, 204)  ' Very light yellow
+            adminSuperRange.FormatConditions.Add Type:=xlExpression, Formula1:="=ISNUMBER(SEARCH(""admin"", $C2))"
+            adminSuperRange.FormatConditions(adminSuperRange.FormatConditions.Count).Interior.Color = RGB(255, 255, 204)  ' Very light yellow
+        End If
+
+        MsgBox "Comparison complete. User input is required for Cells G2:H2"
+    End With
+
+End Sub
+
+' Helper function to check if an item is in a collection
+Function IsInCollection(item As Variant, col As Collection) As Boolean
+    Dim it As Variant
+    On Error Resume Next
+    For Each it In col
+        If it = item Then
+            IsInCollection = True
+            Exit Function
+        End If
+    Next it
+    IsInCollection = False ' Default return value
+    On Error GoTo 0
+End Function
+
