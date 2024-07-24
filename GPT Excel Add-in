@@ -1,0 +1,57 @@
+
+'UPDATE API KEY
+Sub AskOpenAIChat()
+    Dim http As Object
+    Set http = CreateObject("WinHttp.WinHttpRequest.5.1")
+
+    ' The OpenAI API URL for chat completions
+    Dim url As String
+    url = "https://api.openai.com/v1/chat/completions"
+
+    ' Your OpenAI API Key
+    Dim apiKey As String
+    apiKey = "API KEY"
+
+    ' Prompt the user for input
+    Dim userInput As String
+    userInput = InputBox("Enter your conversation input for the AI:", "OpenAI Chat")
+
+    ' Exit if the user pressed cancel or left input empty
+    If userInput = "" Then Exit Sub
+
+     ' Set up the JSON body for the POST request
+    Dim jsonBody As String
+    jsonBody = "{""model"": ""gpt-4o-mini"", ""messages"": [{""role"": ""user"", ""content"": """ & Trim(userInput) & """}], ""max_tokens"": 160, ""temperature"": 0.1}"
+
+    ' Open the HTTP request
+    http.Open "POST", url, False
+    ' Set the necessary HTTP headers
+    http.setRequestHeader "Content-Type", "application/json"
+    http.setRequestHeader "Authorization", "Bearer " & apiKey
+
+     ' Send the request with the JSON body
+    http.Send (jsonBody)
+
+    ' Get the response from the API
+    Dim response As String
+    response = http.ResponseText
+
+    ' Parse the JSON response using the ScriptControl for JavaScript evaluation
+    Dim scriptControl As Object
+    Set scriptControl = CreateObject("MSScriptControl.ScriptControl")
+    scriptControl.Language = "JScript"
+
+    ' Wrap the JSON string with parentheses to force it as an expression
+    scriptControl.Eval "var obj = (" & response & ")"
+
+    ' Extract the assistant's message using the Evaluate method
+    Dim assistantMessage As String
+    assistantMessage = scriptControl.Eval("obj.choices[0].message.content")
+
+    ' Output the assistant's message in a message box
+    MsgBox assistantMessage, vbInformation, "Response from OpenAI Chat"
+
+    ' Clean up
+    Set http = Nothing
+    Set scriptControl = Nothing
+End Sub
